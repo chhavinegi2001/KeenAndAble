@@ -4,13 +4,18 @@ package com.assignment;
 
 	import lombok.Data;
 	import org.springframework.data.annotation.Id;
-	import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
+import org.springframework.data.mongodb.core.index.CompoundIndexes;
+import org.springframework.data.mongodb.core.mapping.Document;
 
 
 
 
 	
 	@Document(collection = "users")
+	@CompoundIndexes({
+	    @CompoundIndex(name = "username_deleted_idx", def = "{'userName': 1, 'isDeleted': 1}")
+	})
 	public class User {
 
 	    @Id
@@ -64,7 +69,7 @@ package com.assignment;
 		}
 
 		public User() {
-			// TODO Auto-generated constructor stub
+			
 		}
 
 		public String getEncryptedPassword() {

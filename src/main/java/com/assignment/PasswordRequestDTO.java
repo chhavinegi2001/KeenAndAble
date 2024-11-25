@@ -11,6 +11,5 @@ public class PasswordRequestDTO {
 		this.password = password;
 	}
 
-    // Getters and setters
 }
 

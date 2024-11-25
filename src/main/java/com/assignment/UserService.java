@@ -25,6 +25,7 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -66,8 +67,8 @@ public class UserService {
 
         logger.info("Starting user registration for {} users", userRequests.size());
 
-        // List to store responses
-        List<UserRegistrationResponse> registrationResponses = Collections.synchronizedList(new ArrayList<>());
+        // List to store responses - using CopyOnWriteArrayList for thread-safety
+        List<UserRegistrationResponse> registrationResponses = new CopyOnWriteArrayList<>();
 
         // CountDownLatch to ensure all threads finish processing
         CountDownLatch latch = new CountDownLatch(userRequests.size());
@@ -79,11 +80,18 @@ public class UserService {
 
                     // Check if the username exists (including soft-deleted users)
                     Optional<User> existingUser = userRepository.findByUserName(userRequest.getUserName());
-                    if (existingUser.isPresent() && !existingUser.get().isDeleted()) {
-                        String message = "Username '" + userRequest.getUserName() + "' already exists and cannot be reused.";
-                        logger.warn(message);
-                        registrationResponses.add(new UserRegistrationResponse(
-                                userRequest.getUserName(), "Failed", message));
+                    if (existingUser.isPresent()) {
+                        if (existingUser.get().isDeleted()) {
+                            String message = "Username '" + userRequest.getUserName() + "' is already soft-deleted and cannot be reused.";
+                            logger.warn(message);
+                            registrationResponses.add(new UserRegistrationResponse(
+                                    userRequest.getUserName(), "Failed", message));
+                        } else {
+                            String message = "Username '" + userRequest.getUserName() + "' already exists and cannot be reused.";
+                            logger.warn(message);
+                            registrationResponses.add(new UserRegistrationResponse(
+                                    userRequest.getUserName(), "Failed", message));
+                        }
                         return;
                     }
 
@@ -128,11 +136,10 @@ public class UserService {
         return registrationResponses;
     }
 
-
     // Method to generate a password mapped to the username
     private String generatePasswordFromUsername(String username) {
-        // Secret key for salting (can be stored securely in environment variables or a config file)
-        final String secretKey = "mySecretKey";
+        // Secret key for salting 
+        final String secretKey = "7897ffvcjkkhhvb";
 
         try {
             // Concatenate username with the secret key
@@ -151,16 +158,7 @@ public class UserService {
     }
 
  // Wrapper method to handle single user registration
-//    public UserRegistrationResponse registerSingleUser(UserRegistrationRequest userRequest) {
-//        logger.info("Registering single user: {}", userRequest.getUserName());
-//
-//        // Reuse the bulk logic for a single user
-//        List<UserRegistrationResponse> responses = bulkRegisterUsers(Collections.singletonList(userRequest));
-//
-//        // Return the first (and only) response
-//        return responses.get(0);
-//    }
-    
+
     public UserRegistrationResponse registerSingleUser(UserRegistrationRequest userRequest) {
         logger.info("Registering single user: {}", userRequest.getUserName());
 
@@ -179,20 +177,27 @@ public class UserService {
     public void deleteUser(String userName) {
         logger.info("Attempting to delete user: {}", userName);
 
-        // Find user, including soft-deleted ones
+        // Find user by userName
         User user = userRepository.findByUserName(userName)
                 .orElseThrow(() -> {
                     logger.error("User not found: {}", userName);
                     return new IllegalArgumentException("User not found");
                 });
 
+        // If the user is already deleted, throw an error
         if (user.isDeleted()) {
             logger.warn("User '{}' is already marked as deleted.", userName);
             throw new IllegalArgumentException("User is already deleted");
         }
 
-        // Mark the user as deleted
+        // Mark the user as deleted (soft delete)
         user.setDeleted(true);
+
+        // Ensure no user exists with the same username that is soft-deleted
+        if (userRepository.existsByUserNameAndIsDeleted(userName, true)) {
+            throw new IllegalArgumentException("User name cannot be reused after deletion");
+        }
+
         userRepository.save(user);
 
         logger.info("User '{}' deleted successfully and cannot be reused.", userName);

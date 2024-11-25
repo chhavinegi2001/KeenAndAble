@@ -16,6 +16,6 @@ package com.assignment;
 			this.userName = userName;
 		}
 
-	    // Getters and setters
+	    
 	}
 
