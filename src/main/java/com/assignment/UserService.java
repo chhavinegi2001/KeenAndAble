@@ -10,7 +10,11 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -53,7 +57,7 @@ public class UserService {
     }
 
   
-    // Bulk user registration with password generation and encryption (supports single and multiple users)
+ // Bulk user registration with password generation and encryption (supports single and multiple users)
     public List<UserRegistrationResponse> bulkRegisterUsers(List<UserRegistrationRequest> userRequests) {
         if (userRequests == null || userRequests.isEmpty()) {
             logger.error("User registration request is empty");
@@ -83,8 +87,8 @@ public class UserService {
                         return;
                     }
 
-                    // Generate and encrypt password
-                    String generatedPassword = generateRandomPassword();
+                    // Generate password mapped with the username
+                    String generatedPassword = generatePasswordFromUsername(userRequest.getUserName());
                     String encryptedPassword = passwordEncoder.encode(generatedPassword);
 
                     // Create and save user
@@ -92,7 +96,7 @@ public class UserService {
                     user.setUserName(userRequest.getUserName());
                     user.setEncryptedPassword(encryptedPassword);
                     user.setDeleted(false); // Ensure user is active
-                    user.setGeneratedPassword(generatedPassword);
+                    user.setGeneratedPassword(generatedPassword); // Optionally store for reference
 
                     User savedUser = userRepository.save(user);
 
@@ -124,28 +128,53 @@ public class UserService {
         return registrationResponses;
     }
 
-    // Method to generate a random password
-    private String generateRandomPassword() {
-        String characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-        StringBuilder password = new StringBuilder();
-        Random random = new Random();
-        for (int i = 0; i < 8; i++) { // Password length 8
-            password.append(characters.charAt(random.nextInt(characters.length())));
+
+    // Method to generate a password mapped to the username
+    private String generatePasswordFromUsername(String username) {
+        // Secret key for salting (can be stored securely in environment variables or a config file)
+        final String secretKey = "mySecretKey";
+
+        try {
+            // Concatenate username with the secret key
+            String input = username + secretKey;
+
+            // Use SHA-256 for hashing
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+
+            // Convert hash to Base64 for readable encoding
+            return Base64.getEncoder().encodeToString(hash);
+
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("Error generating password from username", e);
         }
-        return password.toString();
     }
- 
 
  // Wrapper method to handle single user registration
+//    public UserRegistrationResponse registerSingleUser(UserRegistrationRequest userRequest) {
+//        logger.info("Registering single user: {}", userRequest.getUserName());
+//
+//        // Reuse the bulk logic for a single user
+//        List<UserRegistrationResponse> responses = bulkRegisterUsers(Collections.singletonList(userRequest));
+//
+//        // Return the first (and only) response
+//        return responses.get(0);
+//    }
+    
     public UserRegistrationResponse registerSingleUser(UserRegistrationRequest userRequest) {
         logger.info("Registering single user: {}", userRequest.getUserName());
 
-        // Reuse the bulk logic for a single user
+        // Generate password based on the username
+        String generatedPassword = generatePasswordFromUsername(userRequest.getUserName());
+        userRequest.setPassword(generatedPassword);
+
+        // Call the bulk logic with a single user
         List<UserRegistrationResponse> responses = bulkRegisterUsers(Collections.singletonList(userRequest));
 
         // Return the first (and only) response
         return responses.get(0);
     }
+
  // Delete a user and track username
     public void deleteUser(String userName) {
         logger.info("Attempting to delete user: {}", userName);
@@ -167,9 +196,8 @@ public class UserService {
         userRepository.save(user);
 
         logger.info("User '{}' deleted successfully and cannot be reused.", userName);
-        throw new IllegalArgumentException("deleted successfully");
-        
     }
+
 
 
     // Update a user's username
@@ -197,25 +225,20 @@ public class UserService {
     public User getUserByPassword(String password) {
         logger.info("Starting to retrieve user by password.");
 
-        List<User> users = userRepository.findAll();
+        List<User> users = userRepository.findAll();  // Consider paginating for large datasets.
         for (User user : users) {
-            // Check if the user is deleted, if so, skip this user
-            if (user.isDeleted()) {
-                logger.warn("User '{}' is deleted and cannot be retrieved by password.", user.getUserName());
-                continue;  // Skip this user if deleted
-            }
-            
-            if (passwordEncoder.matches(password, user.getEncryptedPassword())) {
+            if (!user.isDeleted() && passwordEncoder.matches(password, user.getEncryptedPassword())) {
                 logger.info("Password match found for user: {}", user.getUserName());
                 return user;
             }
         }
 
-        logger.warn("No user found matching the provided password.");
+        logger.warn("No matching user found for the provided password.");
         return null;
     }
 
- // Parse file for bulk registration
+
+
     public List<UserRegistrationRequest> parseFile(MultipartFile file) throws IOException {
         List<UserRegistrationRequest> userRequests = new ArrayList<>();
 
@@ -223,10 +246,11 @@ public class UserService {
             String line;
             while ((line = reader.readLine()) != null) {
                 String[] data = line.split(",");
-                if (data.length == 2) {
+                if (data.length == 1) { // Expecting only the username in the file
                     String userName = data[0];
-                    String password = data[1];
-                    userRequests.add(new UserRegistrationRequest(userName, password));
+                    userRequests.add(new UserRegistrationRequest(userName, null)); // Password will be generated later
+                } else {
+                    logger.warn("Invalid line format: {}", line);
                 }
             }
         }

@@ -17,6 +17,7 @@ import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/users")
@@ -41,12 +42,20 @@ public class UserController {
 
 //it will soft delete the data by setting the flag true for username can not be reused in future
 	    @DeleteMapping("/{userName}")
-	    public void deleteUser(@PathVariable String userName) {
+	    public ResponseEntity<String> deleteUser(@PathVariable String userName) {
 	        logger.info("Received delete request for user: {}", userName);
-	        userService.deleteUser(userName);
-	        logger.info("User deleted: {}", userName);
+	        
+	        try {
+	            userService.deleteUser(userName);
+	            logger.info("User deleted successfully: {}", userName);
+	            return ResponseEntity.ok("User deleted successfully");
+	        } catch (IllegalArgumentException e) {
+	            logger.error("Error during user deletion: {}", e.getMessage());
+	            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(e.getMessage());
+	        }
 	    }
-//for updatng the username and any details of user we have in future 
+
+//for updating the username and any details of user we have in future 
 	    @PutMapping("/{userName}")
 	    public User updateUser(@PathVariable String userName, @RequestParam String newUserName) {
 	        logger.info("Received update request for user: {} to {}", userName, newUserName);
@@ -55,47 +64,53 @@ public class UserController {
 	        return updatedUser;
 	    }
 // by this we can get the username via generatedPassword that is linked with username and saved in db as encypted password 
-	    @GetMapping("/getUserByPassword/{password}")
-	    public ResponseEntity<?> getUserByPassword(@PathVariable String password) {
+	    @GetMapping("/getUserByPassword")
+	    public ResponseEntity<?> getUserByPassword(@RequestParam("password") String password) {
+	        logger.info("Received request to fetch user by password.");
+
 	        User user = userService.getUserByPassword(password);
-	        
+
 	        if (user != null) {
-	            return ResponseEntity.ok(user);  // Return user if found
+	            UserResponseDTO response = new UserResponseDTO(user.getUserName());
+	            return ResponseEntity.ok(response);
 	        } else {
-	            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("User is deleted or no match found");  // Return 404 if user is deleted or not found
+	            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+	                    .body("User is deleted or no match found");
 	        }
 	    }
-//consumes csv files for bulk upload and csv have username,password and it can be multiple
+
+// file format should be like  
+	    //user1
+	  //  user2
+	  //  user3
+//in csv format
 	    @PostMapping("/uploadFile")
 	    public ResponseEntity<String> bulkRegisterUsersFromFile(@RequestParam("file") MultipartFile file) {
 	        try {
-	            // Parse the file to get user registration requests
+	            // Parse the file to get user registration requests using the service
 	            List<UserRegistrationRequest> userRequests = userService.parseFile(file);
-	            List<String> existingUsers = new ArrayList<>();
-	            List<UserRegistrationResponse> registrationResponses = new ArrayList<>();
 
-	            for (UserRegistrationRequest userRequest : userRequests) {
-	                Optional<User> existingUser = userRepository.findByUserName(userRequest.getUserName());
+	            // Bulk register users using the service
+	            List<UserRegistrationResponse> registrationResponses = userService.bulkRegisterUsers(userRequests);
 
-	                if (existingUser.isPresent()) {
-	                    existingUsers.add(userRequest.getUserName());
-	                } else {
-	                    // Register the user and store the response
-	                    UserRegistrationResponse response = userService.registerSingleUser(userRequest);
-	                    registrationResponses.add(response);
-	                }
-	            }
+	            // Build response messages
+	            List<String> successMessages = registrationResponses.stream()
+	                    .filter(response -> "Success".equals(response.getStatus()))
+	                    .map(UserRegistrationResponse::getMessage)
+	                    .collect(Collectors.toList());
 
-	            // Prepare the response message
-	            if (!existingUsers.isEmpty()) {
-	                String existingUsersMessage = "The following users already exist: " + String.join(", ", existingUsers);
-	                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(existingUsersMessage);
-	            } else {
-	                return ResponseEntity.ok("Bulk users registered successfully.");
-	            }
+	            List<String> failureMessages = registrationResponses.stream()
+	                    .filter(response -> "Failure".equals(response.getStatus()))
+	                    .map(UserRegistrationResponse::getMessage)
+	                    .collect(Collectors.toList());
+
+	            // Return the appropriate response
+	            String responseMessage = String.format("Success: %d, Failures: %d", successMessages.size(), failureMessages.size());
+	            return ResponseEntity.ok(responseMessage);
 
 	        } catch (Exception e) {
-	            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error processing file");
+	            logger.error("Error processing file", e);
+	            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error processing file: " + e.getMessage());
 	        }
 	    }
 
